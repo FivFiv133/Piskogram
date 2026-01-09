@@ -33,6 +33,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const connectedRef = useRef(false)
   const closedRef = useRef(false)
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
   
   const supabase = createClient()
 
@@ -134,6 +135,12 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
           try {
             if (payload.type === 'offer') {
               await pc.current.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+              // Add any pending candidates
+              for (const candidate of pendingCandidates.current) {
+                await pc.current.addIceCandidate(new RTCIceCandidate(candidate))
+              }
+              pendingCandidates.current = []
+              
               const answer = await pc.current.createAnswer()
               await pc.current.setLocalDescription(answer)
               channel.current?.send({
@@ -143,8 +150,18 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
               })
             } else if (payload.type === 'answer') {
               await pc.current.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+              // Add any pending candidates
+              for (const candidate of pendingCandidates.current) {
+                await pc.current.addIceCandidate(new RTCIceCandidate(candidate))
+              }
+              pendingCandidates.current = []
             } else if (payload.type === 'candidate') {
-              await pc.current.addIceCandidate(new RTCIceCandidate(payload.candidate))
+              // Buffer candidates if remote description not set yet
+              if (pc.current.remoteDescription) {
+                await pc.current.addIceCandidate(new RTCIceCandidate(payload.candidate))
+              } else {
+                pendingCandidates.current.push(payload.candidate)
+              }
             } else if (payload.type === 'hangup') {
               if (!closedRef.current) closeCall()
             }
