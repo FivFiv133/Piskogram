@@ -33,7 +33,7 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [editText, setEditText] = useState('')
   const [showGroupCallAlert, setShowGroupCallAlert] = useState(false)
-  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean } | null>(null)
+  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean; offer?: RTCSessionDescriptionInit } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -55,10 +55,10 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
     if (chat.is_group) return
 
     const channel = supabase
-      .channel(`call:${chat.id}`)
+      .channel(`call-incoming:${chat.id}`)
       .on('broadcast', { event: 'call-signal' }, ({ payload }) => {
         if (payload.from !== currentUserId && payload.type === 'offer' && !activeCall) {
-          setActiveCall({ isVideo: payload.isVideo, isIncoming: true })
+          setActiveCall({ isVideo: payload.isVideo, isIncoming: true, offer: payload.offer })
         }
       })
       .subscribe()
@@ -73,7 +73,35 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
       setShowGroupCallAlert(true)
       return
     }
-    setActiveCall({ isVideo })
+    setActiveCall({ isVideo, isIncoming: false })
+  }
+
+  const handleCallEnd = async (callInfo?: { duration: number; wasConnected: boolean; isVideo: boolean }) => {
+    if (callInfo) {
+      const isOutgoing = !activeCall?.isIncoming
+      let callText = ''
+      
+      if (callInfo.wasConnected) {
+        const mins = Math.floor(callInfo.duration / 60)
+        const secs = callInfo.duration % 60
+        const durationStr = mins > 0 ? `${mins} мин ${secs} сек` : `${secs} сек`
+        callText = `📞 ${isOutgoing ? 'Исходящий' : 'Входящий'} ${callInfo.isVideo ? 'видеозвонок' : 'звонок'} • ${durationStr}`
+      } else {
+        callText = `📞 ${isOutgoing ? 'Исходящий звонок' : 'Пропущенный звонок'}`
+      }
+
+      // Save call message
+      await supabase.from('messages').insert({
+        chat_id: chat.id,
+        sender_id: currentUserId,
+        content: callText,
+        message_type: 'text',
+      })
+      
+      await supabase.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', chat.id)
+    }
+    
+    setActiveCall(null)
   }
 
   const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
@@ -565,9 +593,10 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
           chatId={chat.id}
           currentUserId={currentUserId}
           otherUser={otherProfile}
-          isVideo={activeCall.isVideo}
+          isVideoCall={activeCall.isVideo}
           isIncoming={activeCall.isIncoming}
-          onClose={() => setActiveCall(null)}
+          incomingOffer={activeCall.offer}
+          onClose={handleCallEnd}
         />
       )}
     </div>
