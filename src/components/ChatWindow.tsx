@@ -5,29 +5,55 @@ import { createClient } from '@/lib/supabase/client'
 import { ChatWithDetails, Message, Profile } from '@/types/database'
 import { formatDistanceToNow } from 'date-fns'
 import { ru } from 'date-fns/locale'
-import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck } from 'lucide-react'
+import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck, User, Settings } from 'lucide-react'
 import clsx from 'clsx'
+import ImageModal from './ImageModal'
+import UserProfileModal from './UserProfileModal'
+import GroupInfoModal from './GroupInfoModal'
 
 interface ChatWindowProps {
   chat: ChatWithDetails
   currentUserId: string
   onBack?: () => void
+  onChatUpdate?: (chat: ChatWithDetails) => void
 }
 
-export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowProps) {
-  // Component takes full width of its container
+export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }: ChatWindowProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  const [viewProfile, setViewProfile] = useState<Profile | null>(null)
+  const [showGroupInfo, setShowGroupInfo] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const notificationSound = useRef<HTMLAudioElement | null>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
 
+  // Initialize notification sound
+  useEffect(() => {
+    notificationSound.current = new Audio('/notification.mp3')
+    notificationSound.current.volume = 0.5
+  }, [])
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
-  const otherProfile = otherParticipant?.profile as Profile | undefined
+  const otherProfile = otherParticipant?.profile as unknown as Profile | undefined
 
   useEffect(() => {
     loadMessages()
@@ -40,19 +66,42 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
         schema: 'public',
         table: 'messages',
         filter: `chat_id=eq.${chat.id}`,
-      }, (payload) => {
+      }, async (payload) => {
         const newMsg = payload.new as Message
-        setMessages(prev => [...prev, newMsg])
+        
+        const { data: senderProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', newMsg.sender_id)
+          .single()
+        
+        const msgWithSender = { ...newMsg, sender: senderProfile }
+        setMessages(prev => [...prev, msgWithSender])
+        
         if (newMsg.sender_id !== currentUserId) {
           markAsRead()
+          if (notificationSound.current) {
+            notificationSound.current.play().catch(() => {})
+          }
         }
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `chat_id=eq.${chat.id}`,
+      }, (payload) => {
+        const updatedMsg = payload.new as Message
+        setMessages(prev => prev.map(msg => 
+          msg.id === updatedMsg.id ? { ...msg, is_read: updatedMsg.is_read } : msg
+        ))
       })
       .subscribe()
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [chat.id])
+  }, [chat.id, currentUserId])
 
   useEffect(() => {
     scrollToBottom()
@@ -154,6 +203,14 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
     return 'не в сети'
   }
 
+  const handleHeaderClick = () => {
+    if (chat.is_group) {
+      setShowGroupInfo(true)
+    } else if (otherProfile) {
+      setViewProfile(otherProfile)
+    }
+  }
+
   return (
     <div className="h-full w-full flex flex-col bg-dark-300">
       {/* Header */}
@@ -163,7 +220,10 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
             <ArrowLeft className="w-5 h-5 text-gray-400" />
           </button>
         )}
-        <div className="flex-1 flex items-center gap-3">
+        <div 
+          className="flex-1 flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+          onClick={handleHeaderClick}
+        >
           {chat.is_group ? (
             <div className="w-10 h-10 bg-primary-900/50 rounded-full flex items-center justify-center">
               <Users className="w-5 h-5 text-primary-500" />
@@ -189,9 +249,35 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
           <button className="p-2 hover:bg-dark-100 rounded-full transition-colors">
             <Video className="w-5 h-5 text-gray-400" />
           </button>
-          <button className="p-2 hover:bg-dark-100 rounded-full transition-colors">
-            <MoreVertical className="w-5 h-5 text-gray-400" />
-          </button>
+          <div className="relative" ref={dropdownRef}>
+            <button 
+              onClick={() => setShowDropdown(!showDropdown)}
+              className="p-2 hover:bg-dark-100 rounded-full transition-colors"
+            >
+              <MoreVertical className="w-5 h-5 text-gray-400" />
+            </button>
+            {showDropdown && (
+              <div className="absolute right-0 top-full mt-1 bg-dark-200 border border-dark-50 rounded-xl shadow-lg py-1 min-w-[180px] z-10">
+                {chat.is_group ? (
+                  <button
+                    onClick={() => { setShowGroupInfo(true); setShowDropdown(false) }}
+                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-2"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Информация о группе
+                  </button>
+                ) : otherProfile && (
+                  <button
+                    onClick={() => { setViewProfile(otherProfile); setShowDropdown(false) }}
+                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-2"
+                  >
+                    <User className="w-4 h-4" />
+                    Посмотреть профиль
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -219,13 +305,18 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
                 {!isOwn && (
                   <div className="w-8 h-8 flex-shrink-0">
                     {showAvatar && (
-                      sender?.avatar_url ? (
-                        <img src={sender.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" />
-                      ) : (
-                        <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-primary-800 rounded-full flex items-center justify-center text-white text-sm font-semibold">
-                          {(sender?.username || 'U')[0].toUpperCase()}
-                        </div>
-                      )
+                      <div 
+                        className="cursor-pointer"
+                        onClick={() => sender && setViewProfile(sender)}
+                      >
+                        {sender?.avatar_url ? (
+                          <img src={sender.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-8 h-8 bg-gradient-to-br from-primary-600 to-primary-800 rounded-full flex items-center justify-center text-white text-sm font-semibold">
+                            {(sender?.username || 'U')[0].toUpperCase()}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -237,16 +328,20 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
                       : 'bg-dark-100 text-gray-100 rounded-bl-md'
                   )}
                 >
-                  {/* Show sender name in group chats */}
                   {chat.is_group && !isOwn && showAvatar && sender && (
-                    <p className="text-xs text-primary-400 font-medium mb-1">{sender.username}</p>
+                    <p 
+                      className="text-xs text-primary-400 font-medium mb-1 cursor-pointer hover:underline"
+                      onClick={() => setViewProfile(sender)}
+                    >
+                      {sender.username}
+                    </p>
                   )}
                   {message.message_type === 'image' && message.file_url && (
                     <img
                       src={message.file_url}
                       alt=""
-                      className="rounded-lg max-w-full mb-2 cursor-pointer"
-                      onClick={() => window.open(message.file_url!, '_blank')}
+                      className="rounded-lg max-w-[300px] max-h-[300px] object-contain mb-2 cursor-pointer hover:opacity-90 transition-opacity"
+                      onClick={() => setSelectedImage(message.file_url!)}
                     />
                   )}
                   {message.message_type === 'file' && message.file_url && (
@@ -335,6 +430,31 @@ export default function ChatWindow({ chat, currentUserId, onBack }: ChatWindowPr
           </button>
         </div>
       </form>
+
+      {/* Modals */}
+      {selectedImage && (
+        <ImageModal imageUrl={selectedImage} onClose={() => setSelectedImage(null)} />
+      )}
+
+      {viewProfile && (
+        <UserProfileModal profile={viewProfile} onClose={() => setViewProfile(null)} />
+      )}
+
+      {showGroupInfo && (
+        <GroupInfoModal
+          chat={chat}
+          currentUserId={currentUserId}
+          onClose={() => setShowGroupInfo(false)}
+          onUpdate={(updatedChat) => {
+            if (onChatUpdate) onChatUpdate(updatedChat)
+            setShowGroupInfo(false)
+          }}
+          onViewProfile={(profile) => {
+            setShowGroupInfo(false)
+            setViewProfile(profile)
+          }}
+        />
+      )}
     </div>
   )
 }

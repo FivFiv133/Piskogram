@@ -82,6 +82,12 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
           .limit(1)
           .single()
 
+        // Преобразуем sender в правильный тип
+        const typedLastMessage = lastMessage ? {
+          ...lastMessage,
+          sender: lastMessage.sender as unknown as Profile
+        } : undefined
+
         const { count: unreadCount } = await supabase
           .from('messages')
           .select('*', { count: 'exact', head: true })
@@ -92,7 +98,7 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
         return {
           ...chat,
           participants: participants || [],
-          last_message: lastMessage || undefined,
+          last_message: typedLastMessage,
           unread_count: unreadCount || 0,
         }
       })
@@ -105,7 +111,8 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
   const getChatName = (chat: ChatWithDetails) => {
     if (chat.is_group && chat.name) return chat.name
     const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
-    return otherParticipant?.profile?.username || 'Чат'
+    const profile = otherParticipant?.profile as unknown as Profile | undefined
+    return profile?.username || 'Чат'
   }
 
   const getChatAvatar = (chat: ChatWithDetails) => {
@@ -117,7 +124,7 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
       )
     }
     const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
-    const profile = otherParticipant?.profile as Profile | undefined
+    const profile = otherParticipant?.profile as unknown as Profile | undefined
     if (profile?.avatar_url) {
       return <img src={profile.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover" />
     }

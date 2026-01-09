@@ -62,9 +62,15 @@ export default function MainChat({ initialProfile }: MainChatProps) {
         .select('*, profile:profiles(*)')
         .eq('chat_id', chatId)
 
+      // Преобразуем участников с правильными типами
+      const typedParticipants = (participants || []).map(p => ({
+        ...p,
+        profile: p.profile as unknown as Profile
+      }))
+
       setSelectedChat({
         ...chat,
-        participants: participants || [],
+        participants: typedParticipants,
       })
 
       // Trigger chat list refresh
@@ -129,6 +135,10 @@ export default function MainChat({ initialProfile }: MainChatProps) {
               chat={selectedChat}
               currentUserId={profile.id}
               onBack={isMobile ? () => setSelectedChat(null) : undefined}
+              onChatUpdate={(updatedChat) => {
+                setSelectedChat(updatedChat)
+                setRefreshChats(prev => prev + 1)
+              }}
             />
           </div>
         ) : (
