@@ -64,8 +64,9 @@ export default function NewChatModal({ currentUserId, onClose, onChatCreated }: 
       // Убираем дубликаты
       const uniqueUsers = new Map<string, Profile>()
       otherParticipants.forEach(p => {
-        if (p.profile && !uniqueUsers.has(p.user_id)) {
-          uniqueUsers.set(p.user_id, p.profile as Profile)
+        const profile = p.profile as unknown as Profile
+        if (profile && !uniqueUsers.has(p.user_id)) {
+          uniqueUsers.set(p.user_id, profile)
         }
       })
       setRecentUsers(Array.from(uniqueUsers.values()))
