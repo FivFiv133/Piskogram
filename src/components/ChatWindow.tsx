@@ -33,7 +33,7 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [editText, setEditText] = useState('')
   const [showGroupCallAlert, setShowGroupCallAlert] = useState(false)
-  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean; offer?: RTCSessionDescriptionInit; callMessageId?: string } | null>(null)
+  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean; callMessageId?: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -55,11 +55,11 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
     if (chat.is_group) return
 
     const channel = supabase
-      .channel(`call-incoming:${chat.id}`)
+      .channel(`call-listen:${chat.id}`)
       .on('broadcast', { event: 'call-signal' }, ({ payload }) => {
-        // Only handle offer if we're already in a call (joined via button)
-        if (payload.from !== currentUserId && payload.type === 'offer' && activeCall?.isIncoming && !activeCall.offer) {
-          setActiveCall(prev => prev ? { ...prev, offer: payload.offer } : null)
+        // If someone requests offer and we have active outgoing call, resend offer
+        if (payload.from !== currentUserId && payload.type === 'request-offer' && activeCall && !activeCall.isIncoming) {
+          // The CallModal will handle resending the offer
         }
       })
       .subscribe()
@@ -653,7 +653,6 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
           otherUser={otherProfile}
           isVideoCall={activeCall.isVideo}
           isIncoming={activeCall.isIncoming}
-          incomingOffer={activeCall.offer}
           onClose={handleCallEnd}
         />
       )}

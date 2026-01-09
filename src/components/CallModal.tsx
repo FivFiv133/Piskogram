@@ -11,12 +11,11 @@ interface CallModalProps {
   otherUser: Profile
   isVideoCall: boolean
   isIncoming?: boolean
-  incomingOffer?: RTCSessionDescriptionInit
   onClose: (callInfo?: { duration: number; wasConnected: boolean; isVideo: boolean }) => void
 }
 
-export default function CallModal({ chatId, currentUserId, otherUser, isVideoCall, isIncoming, incomingOffer, onClose }: CallModalProps) {
-  const [callStatus, setCallStatus] = useState<'calling' | 'ringing' | 'connected' | 'ended' | 'declined'>('calling')
+export default function CallModal({ chatId, currentUserId, otherUser, isVideoCall, isIncoming, onClose }: CallModalProps) {
+  const [callStatus, setCallStatus] = useState<'calling' | 'connecting' | 'connected' | 'ended' | 'declined'>('calling')
   const [isMuted, setIsMuted] = useState(false)
   const [isVideoEnabled, setIsVideoEnabled] = useState(isVideoCall)
   const [remoteVideoEnabled, setRemoteVideoEnabled] = useState(false)
@@ -32,6 +31,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
   const wasConnected = useRef(false)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const hasEnded = useRef(false)
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -68,8 +68,10 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
     }, 1000)
   }, [])
 
-  const createPeerConnection = useCallback(async () => {
-    peerConnection.current = new RTCPeerConnection({
+  const createPeerConnection = useCallback(() => {
+    if (peerConnection.current) return peerConnection.current
+
+    const pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
@@ -77,7 +79,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       ]
     })
 
-    peerConnection.current.onicecandidate = (event) => {
+    pc.onicecandidate = (event) => {
       if (event.candidate && channelRef.current) {
         channelRef.current.send({
           type: 'broadcast',
@@ -87,7 +89,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       }
     }
 
-    peerConnection.current.ontrack = (event) => {
+    pc.ontrack = (event) => {
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = event.streams[0]
         const videoTrack = event.streams[0].getVideoTracks()[0]
@@ -97,14 +99,22 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       }
     }
 
-    peerConnection.current.onconnectionstatechange = () => {
-      if (peerConnection.current?.connectionState === 'connected') {
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
         wasConnected.current = true
         setCallStatus('connected')
         startCallTimer()
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        if (!hasEnded.current) {
+          setCallStatus('ended')
+          setTimeout(handleClose, 1500)
+        }
       }
     }
-  }, [currentUserId, startCallTimer])
+
+    peerConnection.current = pc
+    return pc
+  }, [currentUserId, startCallTimer, handleClose])
 
   const getMediaStream = useCallback(async (withVideo: boolean) => {
     try {
@@ -113,7 +123,6 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
         audio: true
       })
     } catch {
-      // If video fails, try audio only
       if (withVideo) {
         return await navigator.mediaDevices.getUserMedia({ video: false, audio: true })
       }
@@ -121,6 +130,20 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
     }
   }, [])
 
+  const addPendingCandidates = useCallback(async () => {
+    if (peerConnection.current && peerConnection.current.remoteDescription) {
+      for (const candidate of pendingCandidates.current) {
+        try {
+          await peerConnection.current.addIceCandidate(candidate)
+        } catch (err) {
+          console.error('Failed to add pending ICE candidate:', err)
+        }
+      }
+      pendingCandidates.current = []
+    }
+  }, [])
+
+  // Outgoing call - create offer
   const startCall = useCallback(async () => {
     try {
       localStream.current = await getMediaStream(isVideoCall)
@@ -128,16 +151,16 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStream.current
       }
-      setIsVideoEnabled(localStream.current.getVideoTracks().length > 0 && localStream.current.getVideoTracks()[0].enabled)
+      setIsVideoEnabled(localStream.current.getVideoTracks().length > 0 && localStream.current.getVideoTracks()[0]?.enabled)
 
-      await createPeerConnection()
+      const pc = createPeerConnection()
       
       localStream.current.getTracks().forEach(track => {
-        peerConnection.current!.addTrack(track, localStream.current!)
+        pc.addTrack(track, localStream.current!)
       })
 
-      const offer = await peerConnection.current!.createOffer()
-      await peerConnection.current!.setLocalDescription(offer)
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
 
       channelRef.current?.send({
         type: 'broadcast',
@@ -151,8 +174,11 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
     }
   }, [isVideoCall, currentUserId, createPeerConnection, getMediaStream, handleClose])
 
-  const acceptCall = useCallback(async () => {
+  // Incoming call - wait for offer then create answer
+  const handleOffer = useCallback(async (offer: RTCSessionDescriptionInit) => {
     try {
+      setCallStatus('connecting')
+      
       localStream.current = await getMediaStream(isVideoCall)
       
       if (localVideoRef.current) {
@@ -160,18 +186,19 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       }
       setIsVideoEnabled(localStream.current.getVideoTracks().length > 0)
 
-      await createPeerConnection()
+      const pc = createPeerConnection()
 
       localStream.current.getTracks().forEach(track => {
-        peerConnection.current!.addTrack(track, localStream.current!)
+        pc.addTrack(track, localStream.current!)
       })
 
-      if (incomingOffer) {
-        await peerConnection.current!.setRemoteDescription(incomingOffer)
-      }
+      await pc.setRemoteDescription(new RTCSessionDescription(offer))
+      
+      // Add any pending ICE candidates
+      await addPendingCandidates()
 
-      const answer = await peerConnection.current!.createAnswer()
-      await peerConnection.current!.setLocalDescription(answer)
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
 
       channelRef.current?.send({
         type: 'broadcast',
@@ -179,11 +206,11 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
         payload: { type: 'answer', answer, from: currentUserId }
       })
     } catch (err) {
-      console.error('Failed to accept call:', err)
+      console.error('Failed to handle offer:', err)
       setCallStatus('ended')
       setTimeout(handleClose, 1500)
     }
-  }, [isVideoCall, currentUserId, incomingOffer, createPeerConnection, getMediaStream, handleClose])
+  }, [isVideoCall, currentUserId, createPeerConnection, getMediaStream, handleClose, addPendingCandidates])
 
   const declineCall = useCallback(() => {
     channelRef.current?.send({
@@ -226,7 +253,6 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       })
       setIsVideoEnabled(!isVideoEnabled)
     } else {
-      // Add video track if not present
       try {
         const videoStream = await navigator.mediaDevices.getUserMedia({ video: true })
         const videoTrack = videoStream.getVideoTracks()[0]
@@ -257,13 +283,27 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       .on('broadcast', { event: 'call-signal' }, async ({ payload }) => {
         if (payload.from === currentUserId) return
 
-        if (payload.type === 'answer' && peerConnection.current) {
-          await peerConnection.current.setRemoteDescription(payload.answer)
-        } else if (payload.type === 'ice-candidate' && peerConnection.current) {
+        if (payload.type === 'offer' && isIncoming) {
+          // Incoming call received offer
+          await handleOffer(payload.offer)
+        } else if (payload.type === 'answer' && peerConnection.current) {
+          // Outgoing call received answer
           try {
-            await peerConnection.current.addIceCandidate(payload.candidate)
+            await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.answer))
+            await addPendingCandidates()
           } catch (err) {
-            console.error('Failed to add ICE candidate:', err)
+            console.error('Failed to set remote description:', err)
+          }
+        } else if (payload.type === 'ice-candidate') {
+          if (peerConnection.current?.remoteDescription) {
+            try {
+              await peerConnection.current.addIceCandidate(payload.candidate)
+            } catch (err) {
+              console.error('Failed to add ICE candidate:', err)
+            }
+          } else {
+            // Queue candidate for later
+            pendingCandidates.current.push(payload.candidate)
           }
         } else if (payload.type === 'end-call' || payload.type === 'decline') {
           cleanup()
@@ -271,14 +311,21 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
           setTimeout(handleClose, 1000)
         }
       })
-      .subscribe()
-
-    // Start or wait for call
-    if (isIncoming) {
-      setCallStatus('ringing')
-    } else {
-      startCall()
-    }
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          // Start call after channel is ready
+          if (!isIncoming) {
+            await startCall()
+          } else {
+            // Request offer from caller
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'call-signal',
+              payload: { type: 'request-offer', from: currentUserId }
+            })
+          }
+        }
+      })
 
     return () => {
       if (channelRef.current) {
@@ -314,7 +361,6 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full">
-            {/* Hidden video elements for audio */}
             <video ref={remoteVideoRef} autoPlay playsInline className="hidden" />
             <video ref={localVideoRef} autoPlay playsInline muted className="hidden" />
             
@@ -328,7 +374,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
             <h2 className="mt-4 text-2xl font-semibold text-white">{otherUser.username}</h2>
             <p className="mt-2 text-gray-400">
               {callStatus === 'calling' && 'Вызов...'}
-              {callStatus === 'ringing' && 'Входящий звонок...'}
+              {callStatus === 'connecting' && 'Соединение...'}
               {callStatus === 'connected' && formatDuration(callDuration)}
               {callStatus === 'ended' && 'Звонок завершён'}
               {callStatus === 'declined' && 'Звонок отклонён'}
@@ -340,24 +386,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       {/* Controls */}
       <div className="bg-dark-200 border-t border-dark-50 p-6">
         <div className="flex items-center justify-center gap-4">
-          {callStatus === 'ringing' ? (
-            <>
-              <button
-                onClick={declineCall}
-                className="p-4 bg-red-600 hover:bg-red-700 rounded-full transition-colors"
-                title="Отклонить"
-              >
-                <PhoneOff className="w-6 h-6 text-white" />
-              </button>
-              <button
-                onClick={acceptCall}
-                className="p-4 bg-green-600 hover:bg-green-700 rounded-full transition-colors"
-                title="Принять"
-              >
-                <Phone className="w-6 h-6 text-white" />
-              </button>
-            </>
-          ) : callStatus === 'calling' || callStatus === 'connected' ? (
+          {callStatus === 'calling' || callStatus === 'connecting' || callStatus === 'connected' ? (
             <>
               <button
                 onClick={toggleMute}

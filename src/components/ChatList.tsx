@@ -146,6 +146,30 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
     return format(date, 'd MMM', { locale: ru })
   }
 
+  const getLastMessageText = (chat: ChatWithDetails) => {
+    if (!chat.last_message) return 'Нет сообщений'
+    
+    if (chat.last_message.message_type === 'call') {
+      try {
+        const callData = JSON.parse(chat.last_message.content)
+        if (callData.status === 'calling') return '📞 Звонок...'
+        if (callData.status === 'declined') return '📞 Звонок отклонён'
+        if (callData.status === 'no_answer') return '📞 Нет ответа'
+        if (callData.status?.startsWith('ended:')) {
+          return `📞 Звонок • ${callData.status.split(':')[1]}`
+        }
+        return '📞 Звонок'
+      } catch {
+        return '📞 Звонок'
+      }
+    }
+    
+    if (chat.last_message.message_type === 'image') return '🖼 Фото'
+    if (chat.last_message.message_type === 'file') return '📎 Файл'
+    
+    return chat.last_message.content
+  }
+
   const filteredChats = chats.filter(chat => 
     getChatName(chat).toLowerCase().includes(search.toLowerCase())
   )
@@ -209,7 +233,7 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-sm text-gray-400 truncate">
-                    {chat.last_message?.content || 'Нет сообщений'}
+                    {getLastMessageText(chat)}
                   </p>
                   {chat.unread_count && chat.unread_count > 0 ? (
                     <span className="bg-primary-600 text-white text-xs px-2 py-0.5 rounded-full min-w-[20px] text-center">
