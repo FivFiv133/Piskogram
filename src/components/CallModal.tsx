@@ -32,6 +32,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const hasEnded = useRef(false)
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
+  const offerRef = useRef<RTCSessionDescriptionInit | null>(null)
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -162,6 +163,9 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
 
+      // Store offer to resend on request
+      offerRef.current = offer
+
       channelRef.current?.send({
         type: 'broadcast',
         event: 'call-signal',
@@ -283,7 +287,14 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
       .on('broadcast', { event: 'call-signal' }, async ({ payload }) => {
         if (payload.from === currentUserId) return
 
-        if (payload.type === 'offer' && isIncoming) {
+        if (payload.type === 'request-offer' && !isIncoming && offerRef.current) {
+          // Resend offer when receiver requests it
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'call-signal',
+            payload: { type: 'offer', offer: offerRef.current, from: currentUserId, isVideo: isVideoCall }
+          })
+        } else if (payload.type === 'offer' && isIncoming) {
           // Incoming call received offer
           await handleOffer(payload.offer)
         } else if (payload.type === 'answer' && peerConnection.current) {
