@@ -10,6 +10,21 @@ interface UserProfileModalProps {
   onClose: () => void
 }
 
+const maskEmail = (email: string) => {
+  const [local, domain] = email.split('@')
+  if (!domain) return email
+  
+  const [domainName, ...rest] = domain.split('.')
+  const maskedLocal = local.length > 2 
+    ? local.slice(0, 2) + '****' + local.slice(-1)
+    : local[0] + '****'
+  const maskedDomain = domainName.length > 2
+    ? domainName.slice(0, 1) + '***'
+    : '***'
+  
+  return `${maskedLocal}@${maskedDomain}.${rest.join('.')}`
+}
+
 export default function UserProfileModal({ profile, onClose }: UserProfileModalProps) {
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -47,7 +62,7 @@ export default function UserProfileModal({ profile, onClose }: UserProfileModalP
           <div className="space-y-3 pt-4 border-t border-dark-50">
             <div className="flex items-center gap-3 text-gray-400">
               <Mail className="w-5 h-5" />
-              <span className="text-sm">{profile.email}</span>
+              <span className="text-sm">{maskEmail(profile.email)}</span>
             </div>
           </div>
         </div>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ChatWithDetails, Profile } from '@/types/database'
-import { formatDistanceToNow } from 'date-fns'
+import { format, isToday, isYesterday } from 'date-fns'
 import { ru } from 'date-fns/locale'
 import { Search, Plus, Users, MessageCircle, Check, CheckCheck } from 'lucide-react'
 import clsx from 'clsx'
@@ -135,6 +135,17 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
     )
   }
 
+  const formatMessageTime = (dateStr: string) => {
+    const date = new Date(dateStr)
+    if (isToday(date)) {
+      return format(date, 'HH:mm')
+    }
+    if (isYesterday(date)) {
+      return 'вчера'
+    }
+    return format(date, 'd MMM', { locale: ru })
+  }
+
   const filteredChats = chats.filter(chat => 
     getChatName(chat).toLowerCase().includes(search.toLowerCase())
   )
@@ -192,7 +203,7 @@ export default function ChatList({ currentUserId, selectedChatId, onSelectChat, 
                   <span className="font-medium text-white truncate">{getChatName(chat)}</span>
                   {chat.last_message && (
                     <span className="text-xs text-gray-500">
-                      {formatDistanceToNow(new Date(chat.last_message.created_at), { addSuffix: true, locale: ru })}
+                      {formatMessageTime(chat.last_message.created_at)}
                     </span>
                   )}
                 </div>

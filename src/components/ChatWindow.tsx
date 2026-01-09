@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import ImageModal from './ImageModal'
 import UserProfileModal from './UserProfileModal'
 import GroupInfoModal from './GroupInfoModal'
+import CallModal from './CallModal'
 
 interface ChatWindowProps {
   chat: ChatWithDetails
@@ -31,6 +32,8 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
   const [showGroupInfo, setShowGroupInfo] = useState(false)
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [editText, setEditText] = useState('')
+  const [showGroupCallAlert, setShowGroupCallAlert] = useState(false)
+  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -46,6 +49,32 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // Listen for incoming calls
+  useEffect(() => {
+    if (chat.is_group) return
+
+    const channel = supabase
+      .channel(`call:${chat.id}`)
+      .on('broadcast', { event: 'call-signal' }, ({ payload }) => {
+        if (payload.from !== currentUserId && payload.type === 'offer' && !activeCall) {
+          setActiveCall({ isVideo: payload.isVideo, isIncoming: true })
+        }
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [chat.id, chat.is_group, currentUserId, activeCall])
+
+  const handleCall = (isVideo: boolean) => {
+    if (chat.is_group) {
+      setShowGroupCallAlert(true)
+      return
+    }
+    setActiveCall({ isVideo })
+  }
 
   const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
   const otherProfile = otherParticipant?.profile as unknown as Profile | undefined
@@ -264,10 +293,16 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button className="p-2 hover:bg-dark-100 rounded-full transition-colors">
+          <button 
+            onClick={() => handleCall(false)}
+            className="p-2 hover:bg-dark-100 rounded-full transition-colors"
+          >
             <Phone className="w-5 h-5 text-gray-400" />
           </button>
-          <button className="p-2 hover:bg-dark-100 rounded-full transition-colors">
+          <button 
+            onClick={() => handleCall(true)}
+            className="p-2 hover:bg-dark-100 rounded-full transition-colors"
+          >
             <Video className="w-5 h-5 text-gray-400" />
           </button>
           <div className="relative" ref={dropdownRef}>
@@ -504,6 +539,35 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
             setShowGroupInfo(false)
             setViewProfile(profile)
           }}
+        />
+      )}
+
+      {showGroupCallAlert && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-200 border border-dark-50 rounded-2xl p-6 max-w-sm w-full text-center">
+            <div className="w-16 h-16 bg-primary-900/50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Users className="w-8 h-8 text-primary-500" />
+            </div>
+            <h3 className="text-lg font-semibold text-white mb-2">Звонки недоступны</h3>
+            <p className="text-gray-400 mb-4">Звонки в групповых чатах пока не поддерживаются</p>
+            <button
+              onClick={() => setShowGroupCallAlert(false)}
+              className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-colors"
+            >
+              Понятно
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeCall && otherProfile && (
+        <CallModal
+          chatId={chat.id}
+          currentUserId={currentUserId}
+          otherUser={otherProfile}
+          isVideo={activeCall.isVideo}
+          isIncoming={activeCall.isIncoming}
+          onClose={() => setActiveCall(null)}
         />
       )}
     </div>
