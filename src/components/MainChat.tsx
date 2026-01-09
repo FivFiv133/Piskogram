@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Profile, ChatWithDetails } from '@/types/database'
+import { Profile, ChatWithDetails, Message } from '@/types/database'
 import ChatList from './ChatList'
 import ChatWindow from './ChatWindow'
 import NewChatModal from './NewChatModal'
@@ -21,7 +21,42 @@ export default function MainChat({ initialProfile }: MainChatProps) {
   const [showProfile, setShowProfile] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [refreshChats, setRefreshChats] = useState(0)
+  const notificationSound = useRef<HTMLAudioElement | null>(null)
   const supabase = createClient()
+
+  // Initialize notification sound
+  useEffect(() => {
+    notificationSound.current = new Audio('/notification.mp3')
+    notificationSound.current.volume = 0.5
+  }, [])
+
+  // Global subscription for notification sounds
+  const selectedChatRef = useRef<ChatWithDetails | null>(null)
+  
+  useEffect(() => {
+    selectedChatRef.current = selectedChat
+  }, [selectedChat])
+
+  useEffect(() => {
+    const globalChannel = supabase
+      .channel('global-messages-notification')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+      }, (payload) => {
+        const newMsg = payload.new as Message
+        // Play sound if: not from current user AND not from currently selected chat
+        if (newMsg.sender_id !== profile.id && newMsg.chat_id !== selectedChatRef.current?.id) {
+          notificationSound.current?.play().catch(() => {})
+        }
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(globalChannel)
+    }
+  }, [profile.id])
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 1024)

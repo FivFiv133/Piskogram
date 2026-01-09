@@ -3,7 +3,9 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ChatWithDetails, Profile } from '@/types/database'
-import { X, Users, Lock, Loader2, Pencil } from 'lucide-react'
+import { X, Users, Loader2, Pencil, UserMinus } from 'lucide-react'
+import { formatDistanceToNow } from 'date-fns'
+import { ru } from 'date-fns/locale'
 
 interface GroupInfoModalProps {
   chat: ChatWithDetails
@@ -17,6 +19,7 @@ export default function GroupInfoModal({ chat, currentUserId, onClose, onUpdate,
   const [isEditing, setIsEditing] = useState(false)
   const [groupName, setGroupName] = useState(chat.name || '')
   const [saving, setSaving] = useState(false)
+  const [removingUser, setRemovingUser] = useState<string | null>(null)
   const supabase = createClient()
 
   // Первый участник считается создателем (тот кто первым добавлен)
@@ -41,6 +44,24 @@ export default function GroupInfoModal({ chat, currentUserId, onClose, onUpdate,
 
     setSaving(false)
     setIsEditing(false)
+  }
+
+  const handleRemoveUser = async (userId: string) => {
+    if (!isCreator || userId === currentUserId) return
+    setRemovingUser(userId)
+
+    const { error } = await supabase
+      .from('chat_participants')
+      .delete()
+      .eq('chat_id', chat.id)
+      .eq('user_id', userId)
+
+    if (!error && onUpdate) {
+      const updatedParticipants = chat.participants.filter(p => p.user_id !== userId)
+      onUpdate({ ...chat, participants: updatedParticipants })
+    }
+
+    setRemovingUser(null)
   }
 
   return (
@@ -86,17 +107,16 @@ export default function GroupInfoModal({ chat, currentUserId, onClose, onUpdate,
                 </div>
               </div>
             ) : (
-              <div className="mt-3 flex items-center gap-2">
-                <h3 className="text-xl font-semibold text-white">{chat.name}</h3>
-                {isCreator ? (
+              <div className="mt-3 flex flex-col items-center">
+                <h3 className="text-xl font-semibold text-white text-center">{chat.name}</h3>
+                {isCreator && (
                   <button
                     onClick={() => setIsEditing(true)}
-                    className="p-1 hover:bg-dark-100 rounded-full transition-colors"
+                    className="mt-2 px-3 py-1 text-sm text-gray-400 hover:text-white hover:bg-dark-100 rounded-lg transition-colors flex items-center gap-1"
                   >
-                    <Pencil className="w-4 h-4 text-gray-400" />
+                    <Pencil className="w-3 h-3" />
+                    Редактировать
                   </button>
-                ) : (
-                  <Lock className="w-4 h-4 text-gray-500" />
                 )}
               </div>
             )}
@@ -116,17 +136,18 @@ export default function GroupInfoModal({ chat, currentUserId, onClose, onUpdate,
                 return (
                   <div
                     key={participant.id}
-                    onClick={() => onViewProfile(profile)}
-                    className="flex items-center gap-3 p-2 hover:bg-dark-100 rounded-xl cursor-pointer transition-colors"
+                    className="flex items-center gap-3 p-2 hover:bg-dark-100 rounded-xl cursor-pointer transition-colors group"
                   >
-                    {profile.avatar_url ? (
-                      <img src={profile.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 bg-gradient-to-br from-primary-600 to-primary-800 rounded-full flex items-center justify-center text-white font-semibold">
-                        {profile.username[0].toUpperCase()}
-                      </div>
-                    )}
-                    <div className="flex-1">
+                    <div onClick={() => onViewProfile(profile)}>
+                      {profile.avatar_url ? (
+                        <img src={profile.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                      ) : (
+                        <div className="w-10 h-10 bg-gradient-to-br from-primary-600 to-primary-800 rounded-full flex items-center justify-center text-white font-semibold">
+                          {profile.username[0].toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1" onClick={() => onViewProfile(profile)}>
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-white">{profile.username}</span>
                         {isParticipantCreator && (
@@ -139,9 +160,28 @@ export default function GroupInfoModal({ chat, currentUserId, onClose, onUpdate,
                         )}
                       </div>
                       <span className={`text-xs ${profile.status === 'online' ? 'text-green-500' : 'text-gray-500'}`}>
-                        {profile.status === 'online' ? 'В сети' : 'Не в сети'}
+                        {profile.status === 'online' 
+                          ? 'В сети' 
+                          : profile.last_seen 
+                            ? `был(а) ${formatDistanceToNow(new Date(profile.last_seen), { addSuffix: true, locale: ru })}`
+                            : 'Не в сети'
+                        }
                       </span>
                     </div>
+                    {isCreator && participant.user_id !== currentUserId && !isParticipantCreator && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleRemoveUser(participant.user_id) }}
+                        disabled={removingUser === participant.user_id}
+                        className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-900/30 rounded-lg transition-all"
+                        title="Исключить"
+                      >
+                        {removingUser === participant.user_id ? (
+                          <Loader2 className="w-4 h-4 text-red-500 animate-spin" />
+                        ) : (
+                          <UserMinus className="w-4 h-4 text-red-500" />
+                        )}
+                      </button>
+                    )}
                   </div>
                 )
               })}

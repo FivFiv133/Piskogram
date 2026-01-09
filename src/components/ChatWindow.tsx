@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { ChatWithDetails, Message, Profile } from '@/types/database'
 import { formatDistanceToNow } from 'date-fns'
 import { ru } from 'date-fns/locale'
-import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck, User, Settings } from 'lucide-react'
+import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck, User, Pencil } from 'lucide-react'
 import clsx from 'clsx'
 import ImageModal from './ImageModal'
 import UserProfileModal from './UserProfileModal'
@@ -29,17 +29,12 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
   const [viewProfile, setViewProfile] = useState<Profile | null>(null)
   const [showGroupInfo, setShowGroupInfo] = useState(false)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
+  const [editText, setEditText] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const notificationSound = useRef<HTMLAudioElement | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
-
-  // Initialize notification sound
-  useEffect(() => {
-    notificationSound.current = new Audio('/notification.mp3')
-    notificationSound.current.volume = 0.5
-  }, [])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -80,9 +75,6 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
         
         if (newMsg.sender_id !== currentUserId) {
           markAsRead()
-          if (notificationSound.current) {
-            notificationSound.current.play().catch(() => {})
-          }
         }
       })
       .on('postgres_changes', {
@@ -128,6 +120,35 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  const startEditMessage = (message: Message) => {
+    setEditingMessage(message)
+    setEditText(message.content)
+  }
+
+  const cancelEdit = () => {
+    setEditingMessage(null)
+    setEditText('')
+  }
+
+  const saveEdit = async () => {
+    if (!editingMessage || !editText.trim()) return
+
+    const { error } = await supabase
+      .from('messages')
+      .update({ content: editText.trim(), updated_at: new Date().toISOString() })
+      .eq('id', editingMessage.id)
+
+    if (!error) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === editingMessage.id 
+          ? { ...msg, content: editText.trim(), updated_at: new Date().toISOString() }
+          : msg
+      ))
+    }
+
+    cancelEdit()
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -261,17 +282,17 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
                 {chat.is_group ? (
                   <button
                     onClick={() => { setShowGroupInfo(true); setShowDropdown(false) }}
-                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-3"
                   >
-                    <Settings className="w-4 h-4" />
+                    <Users className="w-5 h-5 text-gray-400" />
                     Информация о группе
                   </button>
                 ) : otherProfile && (
                   <button
                     onClick={() => { setViewProfile(otherProfile); setShowDropdown(false) }}
-                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left text-white hover:bg-dark-100 flex items-center gap-3"
                   >
-                    <User className="w-4 h-4" />
+                    <User className="w-5 h-5 text-gray-400" />
                     Посмотреть профиль
                   </button>
                 )}
@@ -296,11 +317,12 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
             const isOwn = message.sender_id === currentUserId
             const showAvatar = !isOwn && (index === 0 || messages[index - 1].sender_id !== message.sender_id)
             const sender = message.sender as Profile | undefined
+            const isEdited = message.updated_at && message.updated_at !== message.created_at
 
             return (
               <div
                 key={message.id}
-                className={clsx('flex gap-2 message-enter', isOwn ? 'justify-end' : 'justify-start')}
+                className={clsx('flex gap-2 message-enter group', isOwn ? 'justify-end' : 'justify-start')}
               >
                 {!isOwn && (
                   <div className="w-8 h-8 flex-shrink-0">
@@ -322,12 +344,21 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
                 )}
                 <div
                   className={clsx(
-                    'max-w-[70%] rounded-2xl px-4 py-2',
+                    'max-w-[70%] rounded-2xl px-4 py-2 relative',
                     isOwn
                       ? 'bg-primary-600 text-white rounded-br-md'
                       : 'bg-dark-100 text-gray-100 rounded-bl-md'
                   )}
                 >
+                  {isOwn && message.message_type === 'text' && (
+                    <button
+                      onClick={() => startEditMessage(message)}
+                      className="absolute -left-7 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-100 rounded transition-opacity"
+                      title="Редактировать"
+                    >
+                      <Pencil className="w-4 h-4 text-gray-500" />
+                    </button>
+                  )}
                   {chat.is_group && !isOwn && showAvatar && sender && (
                     <p 
                       className="text-xs text-primary-400 font-medium mb-1 cursor-pointer hover:underline"
@@ -358,8 +389,11 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
                       <span className="text-sm truncate">{message.content}</span>
                     </a>
                   )}
-                  {message.message_type === 'text' && <p className="break-words">{message.content}</p>}
+                  {message.message_type === 'text' && <p className="break-words whitespace-pre-wrap">{message.content}</p>}
                   <div className={clsx('flex items-center gap-1 mt-1', isOwn ? 'justify-end' : 'justify-start')}>
+                    {isEdited && (
+                      <span className={clsx('text-xs', isOwn ? 'text-primary-300' : 'text-gray-500')}>ред.</span>
+                    )}
                     <span className={clsx('text-xs', isOwn ? 'text-primary-200' : 'text-gray-500')}>
                       {new Date(message.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                     </span>
@@ -379,6 +413,19 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Edit Message Bar */}
+      {editingMessage && (
+        <div className="px-4 py-2 bg-dark-200 border-t border-dark-50 flex items-center gap-3">
+          <div className="flex-1">
+            <p className="text-xs text-primary-500 font-medium">Редактирование</p>
+            <p className="text-sm text-gray-400 truncate">{editingMessage.content}</p>
+          </div>
+          <button onClick={cancelEdit} className="p-1 hover:bg-dark-100 rounded">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+      )}
+
       {/* File Preview */}
       {previewUrl && (
         <div className="px-4 py-2 bg-dark-200 border-t border-dark-50">
@@ -395,38 +442,42 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
       )}
 
       {/* Input */}
-      <form onSubmit={sendMessage} className="bg-dark-200 border-t border-dark-50 p-4">
+      <form onSubmit={editingMessage ? (e) => { e.preventDefault(); saveEdit() } : sendMessage} className="bg-dark-200 border-t border-dark-50 p-4">
         <div className="flex items-center gap-2">
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            className="hidden"
-            accept="image/*,.pdf,.doc,.docx,.txt"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 hover:bg-dark-100 rounded-full transition-colors"
-          >
-            <Paperclip className="w-5 h-5 text-gray-400" />
-          </button>
-          <button type="button" className="p-2 hover:bg-dark-100 rounded-full transition-colors">
-            <Smile className="w-5 h-5 text-gray-400" />
-          </button>
+          {!editingMessage && (
+            <>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                className="hidden"
+                accept="image/*,.pdf,.doc,.docx,.txt"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 hover:bg-dark-100 rounded-full transition-colors"
+              >
+                <Paperclip className="w-5 h-5 text-gray-400" />
+              </button>
+              <button type="button" className="p-2 hover:bg-dark-100 rounded-full transition-colors">
+                <Smile className="w-5 h-5 text-gray-400" />
+              </button>
+            </>
+          )}
           <input
             type="text"
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Написать сообщение..."
+            value={editingMessage ? editText : newMessage}
+            onChange={(e) => editingMessage ? setEditText(e.target.value) : setNewMessage(e.target.value)}
+            placeholder={editingMessage ? "Редактировать сообщение..." : "Написать сообщение..."}
             className="flex-1 px-4 py-2 bg-dark-300 border border-dark-50 text-white rounded-full focus:ring-2 focus:ring-primary-500 placeholder-gray-500"
           />
           <button
             type="submit"
-            disabled={(!newMessage.trim() && !selectedFile) || sending}
+            disabled={editingMessage ? !editText.trim() : ((!newMessage.trim() && !selectedFile) || sending)}
             className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Send className="w-5 h-5" />
+            {editingMessage ? <Check className="w-5 h-5" /> : <Send className="w-5 h-5" />}
           </button>
         </div>
       </form>
