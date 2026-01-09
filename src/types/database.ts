@@ -28,7 +28,7 @@ export interface Message {
   chat_id: string
   sender_id: string
   content: string
-  message_type: 'text' | 'image' | 'file'
+  message_type: 'text' | 'image' | 'file' | 'call'
   file_url: string | null
   is_read: boolean
   created_at: string

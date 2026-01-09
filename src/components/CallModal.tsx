@@ -31,6 +31,7 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
   const callStartTime = useRef<number>(0)
   const wasConnected = useRef(false)
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const hasEnded = useRef(false)
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -50,6 +51,8 @@ export default function CallModal({ chatId, currentUserId, otherUser, isVideoCal
   }, [])
 
   const handleClose = useCallback(() => {
+    if (hasEnded.current) return
+    hasEnded.current = true
     cleanup()
     onClose({
       duration: callDuration,

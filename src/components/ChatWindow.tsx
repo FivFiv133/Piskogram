@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { ChatWithDetails, Message, Profile } from '@/types/database'
 import { formatDistanceToNow } from 'date-fns'
 import { ru } from 'date-fns/locale'
-import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck, User, Pencil } from 'lucide-react'
+import { Send, Paperclip, Smile, MoreVertical, Phone, Video, Users, ArrowLeft, X, Check, CheckCheck, User, Pencil, PhoneCall } from 'lucide-react'
 import clsx from 'clsx'
 import ImageModal from './ImageModal'
 import UserProfileModal from './UserProfileModal'
@@ -33,7 +33,7 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [editText, setEditText] = useState('')
   const [showGroupCallAlert, setShowGroupCallAlert] = useState(false)
-  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean; offer?: RTCSessionDescriptionInit } | null>(null)
+  const [activeCall, setActiveCall] = useState<{ isVideo: boolean; isIncoming?: boolean; offer?: RTCSessionDescriptionInit; callMessageId?: string } | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -50,15 +50,16 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Listen for incoming calls
+  // Listen for incoming calls - show notification but don't auto-open modal
   useEffect(() => {
     if (chat.is_group) return
 
     const channel = supabase
       .channel(`call-incoming:${chat.id}`)
       .on('broadcast', { event: 'call-signal' }, ({ payload }) => {
-        if (payload.from !== currentUserId && payload.type === 'offer' && !activeCall) {
-          setActiveCall({ isVideo: payload.isVideo, isIncoming: true, offer: payload.offer })
+        // Only handle offer if we're already in a call (joined via button)
+        if (payload.from !== currentUserId && payload.type === 'offer' && activeCall?.isIncoming && !activeCall.offer) {
+          setActiveCall(prev => prev ? { ...prev, offer: payload.offer } : null)
         }
       })
       .subscribe()
@@ -68,40 +69,58 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
     }
   }, [chat.id, chat.is_group, currentUserId, activeCall])
 
-  const handleCall = (isVideo: boolean) => {
+  const handleCall = async (isVideo: boolean) => {
     if (chat.is_group) {
       setShowGroupCallAlert(true)
       return
     }
-    setActiveCall({ isVideo, isIncoming: false })
+    
+    // Create call message
+    const { data: callMsg } = await supabase.from('messages').insert({
+      chat_id: chat.id,
+      sender_id: currentUserId,
+      content: JSON.stringify({ status: 'calling', isVideo }),
+      message_type: 'call',
+    }).select().single()
+    
+    setActiveCall({ isVideo, isIncoming: false, callMessageId: callMsg?.id })
+  }
+
+  const joinCall = (message: Message) => {
+    const callData = JSON.parse(message.content)
+    if (callData.status === 'calling') {
+      setActiveCall({ isVideo: callData.isVideo, isIncoming: true, callMessageId: message.id })
+    }
   }
 
   const handleCallEnd = async (callInfo?: { duration: number; wasConnected: boolean; isVideo: boolean }) => {
-    if (callInfo) {
-      const isOutgoing = !activeCall?.isIncoming
-      let callText = ''
+    // Prevent multiple calls
+    if (!activeCall) return
+    
+    const callMessageId = activeCall.callMessageId
+    const wasIncoming = activeCall.isIncoming
+    setActiveCall(null)
+    
+    if (callMessageId && callInfo) {
+      let statusText = ''
       
       if (callInfo.wasConnected) {
         const mins = Math.floor(callInfo.duration / 60)
         const secs = callInfo.duration % 60
         const durationStr = mins > 0 ? `${mins} мин ${secs} сек` : `${secs} сек`
-        callText = `📞 ${isOutgoing ? 'Исходящий' : 'Входящий'} ${callInfo.isVideo ? 'видеозвонок' : 'звонок'} • ${durationStr}`
+        statusText = `ended:${durationStr}`
       } else {
-        callText = `📞 ${isOutgoing ? 'Исходящий звонок' : 'Пропущенный звонок'}`
+        statusText = wasIncoming ? 'declined' : 'no_answer'
       }
 
-      // Save call message
-      await supabase.from('messages').insert({
-        chat_id: chat.id,
-        sender_id: currentUserId,
-        content: callText,
-        message_type: 'text',
-      })
+      // Update call message
+      await supabase.from('messages').update({
+        content: JSON.stringify({ status: statusText, isVideo: callInfo.isVideo }),
+        updated_at: new Date().toISOString()
+      }).eq('id', callMessageId)
       
       await supabase.from('chats').update({ updated_at: new Date().toISOString() }).eq('id', chat.id)
     }
-    
-    setActiveCall(null)
   }
 
   const otherParticipant = chat.participants.find(p => p.user_id !== currentUserId)
@@ -142,7 +161,7 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
       }, (payload) => {
         const updatedMsg = payload.new as Message
         setMessages(prev => prev.map(msg => 
-          msg.id === updatedMsg.id ? { ...msg, is_read: updatedMsg.is_read } : msg
+          msg.id === updatedMsg.id ? { ...msg, ...updatedMsg } : msg
         ))
       })
       .subscribe()
@@ -452,6 +471,45 @@ export default function ChatWindow({ chat, currentUserId, onBack, onChatUpdate }
                       <span className="text-sm truncate">{message.content}</span>
                     </a>
                   )}
+                  {message.message_type === 'call' && (() => {
+                    const callData = JSON.parse(message.content)
+                    const isCalling = callData.status === 'calling'
+                    const isEnded = callData.status?.startsWith('ended:')
+                    const duration = isEnded ? callData.status.split(':')[1] : null
+                    const isDeclined = callData.status === 'declined'
+                    const isNoAnswer = callData.status === 'no_answer'
+                    
+                    return (
+                      <div className={clsx(
+                        'flex items-center gap-3 p-2 rounded-lg',
+                        isOwn ? 'bg-primary-700' : 'bg-dark-200'
+                      )}>
+                        <div className={clsx(
+                          'w-10 h-10 rounded-full flex items-center justify-center',
+                          isCalling ? 'bg-green-600 animate-pulse' : 'bg-dark-100'
+                        )}>
+                          {callData.isVideo ? <Video className="w-5 h-5 text-white" /> : <Phone className="w-5 h-5 text-white" />}
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">
+                            {isCalling && (isOwn ? 'Звоним...' : 'Входящий звонок')}
+                            {isEnded && `${callData.isVideo ? 'Видеозвонок' : 'Звонок'} • ${duration}`}
+                            {isDeclined && 'Звонок отклонён'}
+                            {isNoAnswer && 'Нет ответа'}
+                          </p>
+                        </div>
+                        {isCalling && !isOwn && !activeCall && (
+                          <button
+                            onClick={() => joinCall(message)}
+                            className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg flex items-center gap-1"
+                          >
+                            <PhoneCall className="w-4 h-4" />
+                            Принять
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {message.message_type === 'text' && <p className="break-words whitespace-pre-wrap">{message.content}</p>}
                   <div className={clsx('flex items-center gap-1 mt-1', isOwn ? 'justify-end' : 'justify-start')}>
                     {isEdited && (
